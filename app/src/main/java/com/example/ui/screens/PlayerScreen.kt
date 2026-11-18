@@ -123,6 +123,8 @@ fun PlayerScreen(
     onToggleDanmaku: () -> Unit,
     onUpdateDanmakuSettings: ((DanmakuSettings) -> DanmakuSettings) -> Unit,
     onPostDanmaku: (String, Long, DanmakuPosition) -> Unit,
+    onWebServerResponse: (String, String) -> Unit,
+    onWebStreamResolved: (String, String, String) -> Unit,
     onToggleMylist: () -> Unit,
     onDownloadClick: (NicoVideo) -> Unit,
     onTagClick: (String) -> Unit,
@@ -133,7 +135,6 @@ fun PlayerScreen(
     val activity = context as? Activity
 
     var isFullscreen by remember { mutableStateOf(false) }
-    var useFullWatchPage by remember(video.contentId) { mutableStateOf(false) }
     var showControls by remember { mutableStateOf(true) }
     var showDanmakuSheet by remember { mutableStateOf(false) }
     var selectedInfoTab by remember { mutableIntStateOf(0) }
@@ -219,7 +220,7 @@ fun PlayerScreen(
                     indication = null
                 ) { showControls = !showControls }
         ) {
-            if (isLoadingVideo && video.thumbnailUrl.isNotBlank()) {
+            if ((isLoadingVideo || playerState.useWebEmbedFallback) && video.thumbnailUrl.isNotBlank()) {
                 AsyncImage(
                     model = video.thumbnailUrl,
                     contentDescription = video.title,
@@ -228,146 +229,13 @@ fun PlayerScreen(
                 )
             }
 
-            if (playerState.useWebEmbedFallback) {
-                val targetUrl = when {
-                    video.isLive -> "https://live.nicovideo.jp/watch/${video.contentId}"
-                    useFullWatchPage -> "https://www.nicovideo.jp/watch/${video.contentId}"
-                    else -> "https://embed.nicovideo.jp/watch/${video.contentId}"
-                }
-                AndroidView(
-                    factory = { ctx ->
-                        android.webkit.WebView(ctx).apply {
-                            setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                            setBackgroundColor(android.graphics.Color.BLACK)
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            settings.mediaPlaybackRequiresUserGesture = false
-                            settings.useWideViewPort = true
-                            settings.loadWithOverviewMode = true
-                            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                            settings.userAgentString =
-                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-                            val cm = android.webkit.CookieManager.getInstance()
-                            cm.setAcceptCookie(true)
-                            cm.setAcceptThirdPartyCookies(this, true)
-                            webChromeClient = android.webkit.WebChromeClient()
-                            webViewClient = object : android.webkit.WebViewClient() {
-                                private val adHosts = listOf(
-                                    "doubleclick.net",
-                                    "googlesyndication.com",
-                                    "googleadservices.com",
-                                    "ads.nicovideo.jp",
-                                    "taboola.com",
-                                    "outbrain.com",
-                                    "criteo.com",
-                                    "adnxs.com",
-                                    "popin.cc",
-                                    "logly.co.jp",
-                                    "microad.jp",
-                                    "amazon-adsystem.com",
-                                    "im-apps.net"
-                                )
-
-                                override fun shouldInterceptRequest(
-                                    view: android.webkit.WebView?,
-                                    request: android.webkit.WebResourceRequest?
-                                ): android.webkit.WebResourceResponse? {
-                                    val host = request?.url?.host?.lowercase().orEmpty()
-                                    if (adHosts.any { host.contains(it) }) {
-                                        return android.webkit.WebResourceResponse(
-                                            "text/plain",
-                                            "utf-8",
-                                            java.io.ByteArrayInputStream(ByteArray(0))
-                                        )
-                                    }
-                                    return super.shouldInterceptRequest(view, request)
-                                }
-
-                                override fun shouldOverrideUrlLoading(
-                                    view: android.webkit.WebView?,
-                                    request: android.webkit.WebResourceRequest?
-                                ): Boolean {
-                                    val url = request?.url?.toString().orEmpty()
-                                    if (url.contains("nicovideo.jp")) {
-                                        val desktopUrl = url.replace("sp.nicovideo.jp", "www.nicovideo.jp")
-                                        view?.loadUrl(desktopUrl, mapOf("Referer" to "https://www.nicovideo.jp/"))
-                                        return true
-                                    }
-                                    return false
-                                }
-                            }
-                            tag = targetUrl
-                            loadUrl(targetUrl, mapOf("Referer" to "https://www.nicovideo.jp/"))
-                        }
-                    },
-                    update = { webView ->
-                        if (webView.tag != targetUrl) {
-                            webView.tag = targetUrl
-                            webView.loadUrl(targetUrl, mapOf("Referer" to "https://www.nicovideo.jp/"))
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-
-                // Top-left Back + Top-right Fullscreen & Switch-Web overlay for WebView mode
-                IconButton(
-                    onClick = {
-                        if (isFullscreen) isFullscreen = false else onBack()
-                    },
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(6.dp)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.5f))
-                        .testTag("player_back_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = "返回",
-                        tint = Color.White
-                    )
-                }
-
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    if (!video.isLive) {
-                        IconButton(
-                            onClick = { useFullWatchPage = !useFullWatchPage },
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.5f))
-                                .testTag("player_switch_web_mode")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.OpenInBrowser,
-                                contentDescription = "切换网页播放模式",
-                                tint = Color.White
-                            )
-                        }
-                    }
-                    IconButton(
-                        onClick = { isFullscreen = !isFullscreen },
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.5f))
-                            .testTag("player_fullscreen_button")
-                    ) {
-                        Icon(
-                            imageVector = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
-                            contentDescription = if (isFullscreen) "退出横屏" else "横屏全屏",
-                            tint = Color.White
-                        )
-                    }
-                }
-            } else if (player != null) {
+            // Native Media3 ExoPlayer surface (zero cropping, perfect aspect ratio)
+            if (player != null) {
                 AndroidView(
                     factory = { ctx ->
                         PlayerView(ctx).apply {
                             useController = false
+                            resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                             this.player = player
                         }
                     },
@@ -380,22 +248,172 @@ fun PlayerScreen(
                 )
             }
 
-            // Live Danmaku Overlay (for native player mode)
-            if (!playerState.useWebEmbedFallback) {
-                DanmakuOverlay(
-                    comments = comments,
-                    currentPositionMs = playerState.currentPositionMs,
-                    settings = danmakuSettings,
-                    modifier = Modifier.fillMaxSize()
+            // Invisible 1dp headless WebView used strictly as an API resolver when OkHttp hits WAF
+            if (playerState.useWebEmbedFallback) {
+                val targetUrl = if (video.isLive) {
+                    "https://live.nicovideo.jp/watch/${video.contentId}"
+                } else {
+                    "https://www.nicovideo.jp/watch/${video.contentId}"
+                }
+                AndroidView(
+                    factory = { ctx ->
+                        val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                        var resolved = false
+                        android.webkit.WebView(ctx).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.mediaPlaybackRequiresUserGesture = false
+                            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                            settings.userAgentString =
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                            val cm = android.webkit.CookieManager.getInstance()
+                            cm.setAcceptCookie(true)
+                            cm.setAcceptThirdPartyCookies(this, true)
+
+                            fun deliverHls(hlsUrl: String) {
+                                if (resolved || hlsUrl.isBlank()) return
+                                resolved = true
+                                val c1 = cm.getCookie(hlsUrl).orEmpty()
+                                val c2 = cm.getCookie("https://www.nicovideo.jp").orEmpty()
+                                val c3 = cm.getCookie("https://delivery.domand.nicovideo.jp").orEmpty()
+                                val combined = listOf(c1, c2, c3).filter { it.isNotBlank() }.joinToString("; ")
+                                mainHandler.post {
+                                    onWebStreamResolved(video.contentId, hlsUrl, combined)
+                                    stopLoading()
+                                    loadUrl("about:blank")
+                                }
+                            }
+
+                            addJavascriptInterface(
+                                object {
+                                    @android.webkit.JavascriptInterface
+                                    fun onServerResponse(json: String) {
+                                        if (json.isNotBlank()) {
+                                            onWebServerResponse(video.contentId, json)
+                                        }
+                                    }
+
+                                    @android.webkit.JavascriptInterface
+                                    fun onHlsResolved(hlsUrl: String) {
+                                        deliverHls(hlsUrl)
+                                    }
+                                },
+                                "NicoBridge"
+                            )
+
+                            webChromeClient = android.webkit.WebChromeClient()
+                            webViewClient = object : android.webkit.WebViewClient() {
+                                override fun shouldInterceptRequest(
+                                    view: android.webkit.WebView?,
+                                    request: android.webkit.WebResourceRequest?
+                                ): android.webkit.WebResourceResponse? {
+                                    val reqUrl = request?.url?.toString().orEmpty()
+                                    if (!resolved && reqUrl.contains(".m3u8") && reqUrl.contains("nicovideo.jp")) {
+                                        deliverHls(reqUrl)
+                                    }
+                                    return super.shouldInterceptRequest(view, request)
+                                }
+
+                                override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
+                                    super.onPageFinished(view, url)
+                                    if (resolved) return
+                                    val script = """
+                                        (function() {
+                                            try {
+                                                // Mute any background video in headless resolver
+                                                setInterval(function() {
+                                                    document.querySelectorAll('video, audio').forEach(function(m) {
+                                                        m.muted = true;
+                                                        m.volume = 0;
+                                                    });
+                                                }, 250);
+
+                                                var meta = document.querySelector('meta[name="server-response"]');
+                                                if (!meta || !meta.content) return;
+                                                if (window.NicoBridge) {
+                                                    window.NicoBridge.onServerResponse(meta.content);
+                                                }
+                                                var parsed = JSON.parse(meta.content);
+                                                var data = (parsed.data && parsed.data.response) ? parsed.data.response : parsed;
+                                                var domand = data && data.media && data.media.domand;
+                                                var trackId = (data && data.client && data.client.watchTrackId) || ('nicoflow_' + Date.now());
+                                                var vid = (data && data.video && data.video.id) || '${video.contentId}';
+                                                if (domand && domand.accessRightKey) {
+                                                    var bestV = (domand.videos || []).find(function(v) { return v.isAvailable; });
+                                                    var bestA = (domand.audios || []).find(function(a) { return a.isAvailable; });
+                                                    if (bestV && bestA) {
+                                                        fetch('https://nvapi.nicovideo.jp/v1/watch/' + vid + '/access-rights/hls?actionTrackId=' + encodeURIComponent(trackId), {
+                                                            method: 'POST',
+                                                            credentials: 'include',
+                                                            headers: {
+                                                                'Content-Type': 'application/json',
+                                                                'X-Access-Right-Key': domand.accessRightKey,
+                                                                'X-Frontend-Id': '6',
+                                                                'X-Frontend-Version': '0',
+                                                                'X-Request-With': 'https://www.nicovideo.jp'
+                                                            },
+                                                            body: JSON.stringify({ outputs: [[bestV.id, bestA.id]] })
+                                                        }).then(function(r) { return r.json(); })
+                                                          .then(function(j) {
+                                                              var hls = j && j.data && j.data.contentUrl;
+                                                              if (hls && window.NicoBridge) {
+                                                                  window.NicoBridge.onHlsResolved(hls);
+                                                              }
+                                                          }).catch(function() {});
+                                                    }
+                                                }
+                                            } catch (e) {}
+                                        })();
+                                    """.trimIndent()
+                                    view?.evaluateJavascript(script, null)
+                                }
+                            }
+                            tag = targetUrl
+                            loadUrl(targetUrl, mapOf("Referer" to "https://www.nicovideo.jp/"))
+                        }
+                    },
+                    update = { webView ->
+                        if (webView.tag != targetUrl) {
+                            webView.tag = targetUrl
+                            webView.loadUrl(targetUrl, mapOf("Referer" to "https://www.nicovideo.jp/"))
+                        }
+                    },
+                    modifier = Modifier.size(1.dp)
                 )
             }
 
+            // Native Live Danmaku Overlay
+            DanmakuOverlay(
+                comments = comments,
+                currentPositionMs = playerState.currentPositionMs,
+                settings = danmakuSettings,
+                modifier = Modifier.fillMaxSize()
+            )
+
             // Loading / Status Overlay
-            if (isLoadingVideo || (!playerState.useWebEmbedFallback && playerState.isBuffering)) {
-                CircularProgressIndicator(
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.align(Alignment.Center)
-                )
+            if (isLoadingVideo || playerState.useWebEmbedFallback || playerState.isBuffering) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color.Black.copy(alpha = 0.65f))
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp),
+                        strokeWidth = 3.dp
+                    )
+                    if (playerState.useWebEmbedFallback) {
+                        Text(
+                            text = "正在解析视频流与弹幕 API...",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White
+                        )
+                    }
+                }
             }
 
             if (!isLoadingVideo && !playerState.useWebEmbedFallback && playerState.statusMessage != null) {

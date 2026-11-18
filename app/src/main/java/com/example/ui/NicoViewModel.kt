@@ -548,6 +548,28 @@ class NicoViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
     }
 
+    fun onWebServerResponse(videoId: String, serverResponseJson: String) {
+        viewModelScope.launch {
+            repository.syncCommentsFromServerResponse(videoId, serverResponseJson)
+        }
+    }
+
+    fun onWebStreamResolved(videoId: String, hlsUrl: String, rawCookies: String) {
+        val currentVideo = playerState.value.currentVideo ?: return
+        if (currentVideo.contentId != videoId || hlsUrl.isBlank()) return
+        if (!playerState.value.useWebEmbedFallback) return
+        if (rawCookies.isNotBlank()) {
+            app.apiClient.cookieJar.importRawCookies(rawCookies)
+        }
+        _isLoadingVideo.value = false
+        playerController.playStream(
+            video = currentVideo,
+            streamUrl = hlsUrl,
+            isOffline = false,
+            statusMessage = null
+        )
+    }
+
     fun postDanmaku(text: String, colorHex: Long, position: DanmakuPosition) {
         val video = playerState.value.currentVideo ?: return
         if (text.isBlank()) return

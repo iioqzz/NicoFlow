@@ -203,6 +203,26 @@ class NicoRepository(
         return payload.copy(comments = mergedComments)
     }
 
+    suspend fun syncCommentsFromServerResponse(videoId: String, serverResponseJson: String) {
+        val fetched = apiClient.fetchCommentsFromServerResponse(videoId, serverResponseJson)
+        if (fetched.isNotEmpty()) {
+            db.commentDao().clearRemoteComments(videoId)
+            db.commentDao().insertAll(
+                fetched.map {
+                    CachedCommentEntity(
+                        id = it.id,
+                        videoId = it.videoId,
+                        vposMs = it.vposMs,
+                        text = it.text,
+                        colorHex = it.colorHex,
+                        position = it.position.name,
+                        isUserPosted = false
+                    )
+                }
+            )
+        }
+    }
+
     suspend fun postLocalDanmaku(
         videoId: String,
         vposMs: Long,

@@ -75,6 +75,34 @@ class InMemoryCookieJar : CookieJar {
             return list.any { it.name == "user_session" && it.value.isNotBlank() }
         }
     }
+
+    fun importRawCookies(rawCookieHeader: String) {
+        if (rawCookieHeader.isBlank()) return
+        val host = "nicovideo.jp"
+        val list = cookieStore.getOrPut(host) { mutableListOf() }
+        val expiresAt = System.currentTimeMillis() + 6L * 60 * 60 * 1000
+        synchronized(list) {
+            rawCookieHeader.split(";").forEach { part ->
+                val idx = part.indexOf('=')
+                if (idx > 0) {
+                    val name = part.substring(0, idx).trim()
+                    val value = part.substring(idx + 1).trim()
+                    if (name.isNotBlank() && value.isNotBlank()) {
+                        list.removeAll { it.name == name && it.domain == host }
+                        runCatching {
+                            Cookie.Builder()
+                                .name(name)
+                                .value(value)
+                                .domain(host)
+                                .path("/")
+                                .expiresAt(expiresAt)
+                                .build()
+                        }.getOrNull()?.let { list.add(it) }
+                    }
+                }
+            }
+        }
+    }
 }
 
 data class WatchPayload(
@@ -281,6 +309,30 @@ class NicoApiClient {
             ),
             comments = comments.sortedBy { it.vposMs }
         )
+    }
+
+    /**
+     * Parses <meta name="server-response"> JSON extracted from WebView and fetches real nvComment danmaku.
+     */
+    suspend fun fetchCommentsFromServerResponse(
+        videoId: String,
+        serverResponseJson: String
+    ): List<DanmakuComment> = withContext(Dispatchers.IO) {
+        try {
+            val root = JSONObject(serverResponseJson)
+            val data = root.optJSONObject("data")?.optJSONObject("response")
+                ?: root.optJSONObject("data")
+                ?: root
+            val nvComment = data.optJSONObject("comment")?.optJSONObject("nvComment")
+                ?: return@withContext emptyList()
+            val server = nvComment.optString("server", "https://nvcomment.nicovideo.jp")
+            val threadKey = nvComment.optString("threadKey", "")
+            val params = nvComment.optJSONObject("params") ?: return@withContext emptyList()
+            if (threadKey.isBlank()) return@withContext emptyList()
+            fetchNvComments(videoId, server, threadKey, params).sortedBy { it.vposMs }
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     private fun fetchWatchJsonViaPageJson(videoId: String, debugCodes: MutableList<String>): JSONObject? {
