@@ -53,6 +53,7 @@ enum class HomeFeedTab(val label: String) {
 data class HomeUiState(
     val feedTab: HomeFeedTab = HomeFeedTab.RECOMMEND,
     val selectedCategory: NicoCategory = NicoCategory.ALL,
+    val hotRecentDays: Int? = null,
     val videos: List<NicoVideo> = emptyList(),
     val isLoading: Boolean = false,
     val isRefreshing: Boolean = false,
@@ -247,6 +248,12 @@ class NicoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setHotRecentDays(days: Int?) {
+        val validDays = days?.takeIf { it > 0 }
+        _homeState.update { it.copy(hotRecentDays = validDays) }
+        loadCategory(_homeState.value.selectedCategory, _homeState.value.feedTab)
+    }
+
     fun loadCategory(category: NicoCategory, feedTab: HomeFeedTab = _homeState.value.feedTab) {
         homePageIndex = 0
         _homeState.update {
@@ -260,12 +267,13 @@ class NicoViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             val result = repository.fetchRecommendedFeed(
-                categoryTag = category.queryTag,
+                category = category,
                 isHotTab = feedTab == HomeFeedTab.HOT,
                 pageIndex = homePageIndex,
                 interestTags = userInterestTags.toList(),
                 excludedIds = dislikedVideoIds,
-                dislikedTags = dislikedTags
+                dislikedTags = dislikedTags,
+                hotRecentDays = _homeState.value.hotRecentDays
             )
             result.onSuccess { list ->
                 seenVideoIds.addAll(list.map { it.contentId })
@@ -297,12 +305,13 @@ class NicoViewModel(application: Application) : AndroidViewModel(application) {
         _homeState.update { it.copy(isRefreshing = true, errorMessage = null) }
         viewModelScope.launch {
             val result = repository.fetchRecommendedFeed(
-                categoryTag = current.selectedCategory.queryTag,
+                category = current.selectedCategory,
                 isHotTab = current.feedTab == HomeFeedTab.HOT,
                 pageIndex = homePageIndex,
                 interestTags = userInterestTags.toList(),
                 excludedIds = seenVideoIds + dislikedVideoIds,
-                dislikedTags = dislikedTags
+                dislikedTags = dislikedTags,
+                hotRecentDays = current.hotRecentDays
             )
             result.onSuccess { freshList ->
                 if (freshList.isNotEmpty()) {
@@ -337,12 +346,13 @@ class NicoViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val existingIds = current.videos.map { it.contentId }.toSet()
             val result = repository.fetchRecommendedFeed(
-                categoryTag = current.selectedCategory.queryTag,
+                category = current.selectedCategory,
                 isHotTab = current.feedTab == HomeFeedTab.HOT,
                 pageIndex = homePageIndex,
                 interestTags = userInterestTags.toList(),
                 excludedIds = existingIds + dislikedVideoIds,
-                dislikedTags = dislikedTags
+                dislikedTags = dislikedTags,
+                hotRecentDays = current.hotRecentDays
             )
             result.onSuccess { more ->
                 seenVideoIds.addAll(more.map { it.contentId })

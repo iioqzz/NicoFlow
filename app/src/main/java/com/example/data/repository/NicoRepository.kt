@@ -69,28 +69,54 @@ class NicoRepository(
      * filters out already-seen and disliked videos, and interleaves results for freshness.
      */
     suspend fun fetchRecommendedFeed(
-        categoryTag: String,
+        category: com.example.data.model.NicoCategory,
         isHotTab: Boolean,
         pageIndex: Int,
         interestTags: List<String>,
         excludedIds: Set<String>,
-        dislikedTags: Set<String>
+        dislikedTags: Set<String>,
+        hotRecentDays: Int? = null
     ): Result<List<NicoVideo>> {
         val offset = (pageIndex * 20) % 200
+
+        // Bangumi (番剧) category: official/channel anime (including region-locked licensed anime)
+        if (category == com.example.data.model.NicoCategory.BANGUMI) {
+            return apiClient.searchVideos(
+                query = "アニメ 第1話 OR プレミアム限定動画 OR dアニメストア",
+                categoryTag = "",
+                sortOrder = NicoSortOrder.VIEWS,
+                limit = 30,
+                offset = offset,
+                recentDays = 60
+            ).map { list ->
+                val officialAnime = list.filter { v ->
+                    v.contentId.startsWith("so") || v.tags.any { it.contains("プレミアム限定") || it.contains("dアニメ") }
+                }
+                (if (officialAnime.isNotEmpty()) officialAnime else list)
+                    .distinctBy { it.contentId }
+                    .filterNot { it.contentId in excludedIds }
+            }
+        }
+
+        val categoryTag = category.queryTag
         if (isHotTab) {
+            // Hot tab: manual publish-time filter (null = all-time, or user-specified days)
+            val hotOffset = (pageIndex * 40) % 1000
             return apiClient.searchVideos(
                 query = "",
                 categoryTag = categoryTag,
                 sortOrder = NicoSortOrder.VIEWS,
-                limit = 24,
-                offset = offset,
-                recentDays = 7
+                limit = 50,
+                offset = hotOffset,
+                recentDays = hotRecentDays
             ).map { list ->
-                list.filterNot { it.contentId in excludedIds }
+                val userVideos = list.filterNot { it.contentId.startsWith("so") }
+                (if (userVideos.isNotEmpty()) userVideos else list)
+                    .filterNot { it.contentId in excludedIds }
             }
         }
 
-        // Recommend tab: blend recent active videos + personalized interest tag videos
+        // Recommend tab: blend recent active user videos + personalized interest tag videos
         val sortRotation = listOf(
             NicoSortOrder.COMMENTS,
             NicoSortOrder.MYLIST,
@@ -102,7 +128,7 @@ class NicoRepository(
             query = "",
             categoryTag = categoryTag,
             sortOrder = mainSort,
-            limit = 24,
+            limit = 30,
             offset = offset,
             recentDays = 30
         )
@@ -125,6 +151,7 @@ class NicoRepository(
 
         val filtered = baseList
             .distinctBy { it.contentId }
+            .filterNot { it.contentId.startsWith("so") }
             .filterNot { it.contentId in excludedIds }
             .filterNot { video ->
                 dislikedTags.isNotEmpty() && video.tags.any { it in dislikedTags }

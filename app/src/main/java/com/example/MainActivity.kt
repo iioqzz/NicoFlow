@@ -216,6 +216,7 @@ fun NicoFlowRoot(viewModel: NicoViewModel = viewModel()) {
                             onSelectFeedTab = viewModel::selectHomeFeedTab,
                             onSelectCategory = { viewModel.loadCategory(it) },
                             onSelectLiveCategory = viewModel::loadLiveCategory,
+                            onHotDaysChange = viewModel::setHotRecentDays,
                             onRefresh = viewModel::refreshHomeFeed,
                             onLoadMore = viewModel::loadMoreHomeFeed,
                             onNotInterested = viewModel::markNotInterested,

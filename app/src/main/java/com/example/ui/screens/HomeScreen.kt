@@ -84,6 +84,7 @@ fun HomeScreen(
     onSelectFeedTab: (HomeFeedTab) -> Unit,
     onSelectCategory: (NicoCategory) -> Unit,
     onSelectLiveCategory: (NicoLiveCategory) -> Unit,
+    onHotDaysChange: (Int?) -> Unit,
     onRefresh: () -> Unit,
     onLoadMore: () -> Unit,
     onNotInterested: (NicoVideo) -> Unit,
@@ -92,6 +93,8 @@ fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
     val gridState = rememberLazyGridState()
+    var showDaysDialog by remember { mutableStateOf(false) }
+    var daysInputText by remember { mutableStateOf("") }
 
     // Trigger infinite scroll when approaching the bottom of the grid
     val shouldLoadMore by remember {
@@ -197,10 +200,26 @@ fun HomeScreen(
             ) {
                 items(NicoCategory.entries) { category ->
                     val selected = state.selectedCategory == category
+                    val chipLabel = if (
+                        category == NicoCategory.ALL &&
+                        state.feedTab == HomeFeedTab.HOT &&
+                        state.hotRecentDays != null
+                    ) {
+                        "${category.label} · ${state.hotRecentDays}天"
+                    } else {
+                        category.label
+                    }
                     FilterChip(
                         selected = selected,
-                        onClick = { onSelectCategory(category) },
-                        label = { Text(category.label, style = MaterialTheme.typography.labelMedium) },
+                        onClick = {
+                            if (category == NicoCategory.ALL && selected && state.feedTab == HomeFeedTab.HOT) {
+                                daysInputText = state.hotRecentDays?.toString().orEmpty()
+                                showDaysDialog = true
+                            } else {
+                                onSelectCategory(category)
+                            }
+                        },
+                        label = { Text(chipLabel, style = MaterialTheme.typography.labelMedium) },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
                             selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -295,6 +314,62 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    if (showDaysDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showDaysDialog = false },
+            title = { Text("热门发布时间范围（天数）") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "输入最近天数以筛选热门视频，留空或设为 0 表示不限时间。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    androidx.compose.material3.OutlinedTextField(
+                        value = daysInputText,
+                        onValueChange = { input ->
+                            daysInputText = input.filter { it.isDigit() }.take(4)
+                        },
+                        placeholder = { Text("例如: 7 / 30 / 365（留空不限）") },
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("hot_days_input")
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(null to "不限", 7 to "7天", 30 to "30天", 365 to "1年").forEach { (d, label) ->
+                            FilterChip(
+                                selected = daysInputText == (d?.toString() ?: ""),
+                                onClick = { daysInputText = d?.toString().orEmpty() },
+                                label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        val parsed = daysInputText.toIntOrNull()?.takeIf { it > 0 }
+                        onHotDaysChange(parsed)
+                        showDaysDialog = false
+                    },
+                    modifier = Modifier.testTag("hot_days_confirm")
+                ) {
+                    Text("确定")
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { showDaysDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 

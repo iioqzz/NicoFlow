@@ -1,5 +1,9 @@
 package com.example.ui.screens
 
+import android.app.Activity
+import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.view.View
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -36,12 +40,16 @@ import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Headphones
+import androidx.compose.material.icons.outlined.OpenInBrowser
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Subtitles
 import androidx.compose.material.icons.outlined.SubtitlesOff
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Forward10
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay10
@@ -63,6 +71,8 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -74,12 +84,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.Player
 import androidx.media3.ui.PlayerView
+import coil.compose.AsyncImage
 import com.example.data.model.DanmakuComment
 import com.example.data.model.DanmakuPosition
 import com.example.data.model.DanmakuSettings
@@ -112,15 +128,66 @@ fun PlayerScreen(
     onTagClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    BackHandler { onBack() }
-
     val video = playerState.currentVideo ?: return
+    val context = LocalContext.current
+    val activity = context as? Activity
+
+    var isFullscreen by remember { mutableStateOf(false) }
+    var useFullWatchPage by remember(video.contentId) { mutableStateOf(false) }
     var showControls by remember { mutableStateOf(true) }
     var showDanmakuSheet by remember { mutableStateOf(false) }
     var selectedInfoTab by remember { mutableIntStateOf(0) }
     var commentInput by remember { mutableStateOf("") }
     var selectedColor by remember { mutableLongStateOf(0xFFFFFFFFL) }
     var selectedPosition by remember { mutableStateOf(DanmakuPosition.SCROLL) }
+
+    BackHandler {
+        if (isFullscreen) {
+            isFullscreen = false
+        } else {
+            onBack()
+        }
+    }
+
+    // Apply landscape orientation & immersive system bars when fullscreen is toggled
+    LaunchedEffect(isFullscreen) {
+        activity?.let { act ->
+            val controller = WindowCompat.getInsetsController(act.window, act.window.decorView)
+            if (isFullscreen) {
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                controller.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                controller.show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            activity?.let { act ->
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                WindowCompat.getInsetsController(act.window, act.window.decorView)
+                    .show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
+
+    val shareVideo: () -> Unit = {
+        val url = if (video.isLive) {
+            "https://live.nicovideo.jp/watch/${video.contentId}"
+        } else {
+            "https://www.nicovideo.jp/watch/${video.contentId}"
+        }
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, video.title)
+            putExtra(Intent.EXTRA_TEXT, "${video.title}\n$url")
+        }
+        context.startActivity(Intent.createChooser(intent, "分享视频"))
+    }
 
     val speedOptions = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
     val danmakuColors = listOf(
@@ -136,15 +203,15 @@ fun PlayerScreen(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .imePadding()
+            .then(
+                if (isFullscreen) Modifier else Modifier.statusBarsPadding().navigationBarsPadding().imePadding()
+            )
     ) {
-        // 16:9 Video + Danmaku + Custom HUD (or Official Niconico Embed WebView Fallback)
+        // 16:9 Video (or Fullscreen Landscape) + Danmaku + Custom HUD
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(16f / 9f)
+                .then(if (isFullscreen) Modifier.fillMaxSize() else Modifier.aspectRatio(16f / 9f))
                 .background(Color.Black)
                 .clickable(
                     enabled = !playerState.useWebEmbedFallback,
@@ -152,32 +219,25 @@ fun PlayerScreen(
                     indication = null
                 ) { showControls = !showControls }
         ) {
+            if (isLoadingVideo && video.thumbnailUrl.isNotBlank()) {
+                AsyncImage(
+                    model = video.thumbnailUrl,
+                    contentDescription = video.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
             if (playerState.useWebEmbedFallback) {
-                val embedUrl = if (video.isLive) {
-                    "https://live.nicovideo.jp/embed/${video.contentId}"
-                } else {
-                    "https://embed.nicovideo.jp/watch/${video.contentId}?jsapi=1&playerId=1"
-                }
-                val iframeHtml = remember(embedUrl) {
-                    """
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                      <style>
-                        html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
-                        iframe { width: 100%; height: 100%; border: 0; display: block; }
-                      </style>
-                    </head>
-                    <body>
-                      <iframe src="$embedUrl" allow="autoplay; fullscreen; encrypted-media" allowfullscreen></iframe>
-                    </body>
-                    </html>
-                    """.trimIndent()
+                val targetUrl = when {
+                    video.isLive -> "https://live.nicovideo.jp/watch/${video.contentId}"
+                    useFullWatchPage -> "https://www.nicovideo.jp/watch/${video.contentId}"
+                    else -> "https://embed.nicovideo.jp/watch/${video.contentId}"
                 }
                 AndroidView(
                     factory = { ctx ->
                         android.webkit.WebView(ctx).apply {
+                            setLayerType(View.LAYER_TYPE_HARDWARE, null)
                             setBackgroundColor(android.graphics.Color.BLACK)
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
@@ -230,33 +290,35 @@ fun PlayerScreen(
                                     val url = request?.url?.toString().orEmpty()
                                     if (url.contains("nicovideo.jp")) {
                                         val desktopUrl = url.replace("sp.nicovideo.jp", "www.nicovideo.jp")
-                                        view?.loadUrl(desktopUrl)
+                                        view?.loadUrl(desktopUrl, mapOf("Referer" to "https://www.nicovideo.jp/"))
                                         return true
                                     }
                                     return false
                                 }
                             }
-                            tag = embedUrl
-                            loadDataWithBaseURL("https://www.nicovideo.jp/", iframeHtml, "text/html", "UTF-8", null)
+                            tag = targetUrl
+                            loadUrl(targetUrl, mapOf("Referer" to "https://www.nicovideo.jp/"))
                         }
                     },
                     update = { webView ->
-                        if (webView.tag != embedUrl) {
-                            webView.tag = embedUrl
-                            webView.loadDataWithBaseURL("https://www.nicovideo.jp/", iframeHtml, "text/html", "UTF-8", null)
+                        if (webView.tag != targetUrl) {
+                            webView.tag = targetUrl
+                            webView.loadUrl(targetUrl, mapOf("Referer" to "https://www.nicovideo.jp/"))
                         }
                     },
                     modifier = Modifier.fillMaxSize()
                 )
 
-                // Back button overlay for WebView embed mode
+                // Top-left Back + Top-right Fullscreen & Switch-Web overlay for WebView mode
                 IconButton(
-                    onClick = onBack,
+                    onClick = {
+                        if (isFullscreen) isFullscreen = false else onBack()
+                    },
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(4.dp)
+                        .padding(6.dp)
                         .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.45f))
+                        .background(Color.Black.copy(alpha = 0.5f))
                         .testTag("player_back_button")
                 ) {
                     Icon(
@@ -264,6 +326,42 @@ fun PlayerScreen(
                         contentDescription = "返回",
                         tint = Color.White
                     )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (!video.isLive) {
+                        IconButton(
+                            onClick = { useFullWatchPage = !useFullWatchPage },
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.5f))
+                                .testTag("player_switch_web_mode")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.OpenInBrowser,
+                                contentDescription = "切换网页播放模式",
+                                tint = Color.White
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = { isFullscreen = !isFullscreen },
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.5f))
+                            .testTag("player_fullscreen_button")
+                    ) {
+                        Icon(
+                            imageVector = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                            contentDescription = if (isFullscreen) "退出横屏" else "横屏全屏",
+                            tint = Color.White
+                        )
+                    }
                 }
             } else if (player != null) {
                 AndroidView(
@@ -486,12 +584,25 @@ fun PlayerScreen(
                                 )
                             }
                         }
+                        IconButton(
+                            onClick = { isFullscreen = !isFullscreen },
+                            modifier = Modifier
+                                .size(32.dp)
+                                .testTag("native_fullscreen_button")
+                        ) {
+                            Icon(
+                                imageVector = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                                contentDescription = if (isFullscreen) "退出横屏" else "横屏全屏",
+                                tint = Color.White
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // Quick Action Row (Background Audio, Mylist, Download, Offline badge)
+        if (!isFullscreen) {
+        // Quick Action Row (Background Audio, Mylist, Download, Share)
         Surface(
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 1.dp
@@ -499,7 +610,7 @@ fun PlayerScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -513,7 +624,7 @@ fun PlayerScreen(
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("后台播放", style = MaterialTheme.typography.labelLarge)
+                    Text("后台", style = MaterialTheme.typography.labelLarge)
                 }
 
                 TextButton(
@@ -542,8 +653,21 @@ fun PlayerScreen(
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text(if (isDownloaded) "已离线" else "离线下载", style = MaterialTheme.typography.labelLarge)
+                        Text(if (isDownloaded) "已离线" else "离线", style = MaterialTheme.typography.labelLarge)
                     }
+                }
+
+                TextButton(
+                    onClick = shareVideo,
+                    modifier = Modifier.testTag("player_share_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Share,
+                        contentDescription = "分享视频",
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("分享", style = MaterialTheme.typography.labelLarge)
                 }
             }
         }
@@ -732,6 +856,7 @@ fun PlayerScreen(
                 }
             }
         }
+        } // end if (!isFullscreen)
     }
 
     if (showDanmakuSheet) {

@@ -27,6 +27,7 @@ enum class NicoLiveCategory(val label: String, val tabParam: String, val fallbac
 
 enum class NicoCategory(val label: String, val queryTag: String) {
     ALL("综合热门", ""),
+    BANGUMI("番剧", "アニメ"),
     VOCALOID("VOCALOID", "VOCALOID"),
     GAME("游戏", "ゲーム"),
     ANIME("动画", "アニメ"),
