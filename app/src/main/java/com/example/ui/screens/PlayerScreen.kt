@@ -156,25 +156,94 @@ fun PlayerScreen(
                 val embedUrl = if (video.isLive) {
                     "https://live.nicovideo.jp/embed/${video.contentId}"
                 } else {
-                    "https://embed.nicovideo.jp/watch/${video.contentId}"
+                    "https://embed.nicovideo.jp/watch/${video.contentId}?jsapi=1&playerId=1"
+                }
+                val iframeHtml = remember(embedUrl) {
+                    """
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                      <style>
+                        html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+                        iframe { width: 100%; height: 100%; border: 0; display: block; }
+                      </style>
+                    </head>
+                    <body>
+                      <iframe src="$embedUrl" allow="autoplay; fullscreen; encrypted-media" allowfullscreen></iframe>
+                    </body>
+                    </html>
+                    """.trimIndent()
                 }
                 AndroidView(
                     factory = { ctx ->
                         android.webkit.WebView(ctx).apply {
+                            setBackgroundColor(android.graphics.Color.BLACK)
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
                             settings.mediaPlaybackRequiresUserGesture = false
+                            settings.useWideViewPort = true
+                            settings.loadWithOverviewMode = true
+                            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                            settings.userAgentString =
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
                             val cm = android.webkit.CookieManager.getInstance()
                             cm.setAcceptCookie(true)
                             cm.setAcceptThirdPartyCookies(this, true)
                             webChromeClient = android.webkit.WebChromeClient()
-                            webViewClient = android.webkit.WebViewClient()
-                            loadUrl(embedUrl)
+                            webViewClient = object : android.webkit.WebViewClient() {
+                                private val adHosts = listOf(
+                                    "doubleclick.net",
+                                    "googlesyndication.com",
+                                    "googleadservices.com",
+                                    "ads.nicovideo.jp",
+                                    "taboola.com",
+                                    "outbrain.com",
+                                    "criteo.com",
+                                    "adnxs.com",
+                                    "popin.cc",
+                                    "logly.co.jp",
+                                    "microad.jp",
+                                    "amazon-adsystem.com",
+                                    "im-apps.net"
+                                )
+
+                                override fun shouldInterceptRequest(
+                                    view: android.webkit.WebView?,
+                                    request: android.webkit.WebResourceRequest?
+                                ): android.webkit.WebResourceResponse? {
+                                    val host = request?.url?.host?.lowercase().orEmpty()
+                                    if (adHosts.any { host.contains(it) }) {
+                                        return android.webkit.WebResourceResponse(
+                                            "text/plain",
+                                            "utf-8",
+                                            java.io.ByteArrayInputStream(ByteArray(0))
+                                        )
+                                    }
+                                    return super.shouldInterceptRequest(view, request)
+                                }
+
+                                override fun shouldOverrideUrlLoading(
+                                    view: android.webkit.WebView?,
+                                    request: android.webkit.WebResourceRequest?
+                                ): Boolean {
+                                    val url = request?.url?.toString().orEmpty()
+                                    if (url.contains("nicovideo.jp")) {
+                                        val desktopUrl = url.replace("sp.nicovideo.jp", "www.nicovideo.jp")
+                                        view?.loadUrl(desktopUrl)
+                                        return true
+                                    }
+                                    return false
+                                }
+                            }
+                            tag = embedUrl
+                            loadDataWithBaseURL("https://www.nicovideo.jp/", iframeHtml, "text/html", "UTF-8", null)
                         }
                     },
                     update = { webView ->
-                        if (webView.url != embedUrl) {
-                            webView.loadUrl(embedUrl)
+                        if (webView.tag != embedUrl) {
+                            webView.tag = embedUrl
+                            webView.loadDataWithBaseURL("https://www.nicovideo.jp/", iframeHtml, "text/html", "UTF-8", null)
                         }
                     },
                     modifier = Modifier.fillMaxSize()

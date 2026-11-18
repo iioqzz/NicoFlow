@@ -137,6 +137,12 @@ class NicoViewModel(application: Application) : AndroidViewModel(application) {
     private var mylistObserverJob: Job? = null
     private var activeLiveSocket: WebSocket? = null
 
+    private val seenVideoIds = mutableSetOf<String>()
+    private val dislikedVideoIds = mutableSetOf<String>()
+    private val dislikedTags = mutableSetOf<String>()
+    private val userInterestTags = mutableListOf<String>()
+    private var homePageIndex = 0
+
     init {
         viewModelScope.launch {
             accountPrefs.accountFlow.collect { acc ->
@@ -229,12 +235,6 @@ class NicoViewModel(application: Application) : AndroidViewModel(application) {
             playerController.togglePlayPause()
         }
     }
-
-    private val seenVideoIds = mutableSetOf<String>()
-    private val dislikedVideoIds = mutableSetOf<String>()
-    private val dislikedTags = mutableSetOf<String>()
-    private val userInterestTags = mutableListOf<String>()
-    private var homePageIndex = 0
 
     fun selectHomeFeedTab(tab: HomeFeedTab) {
         _homeState.update { it.copy(feedTab = tab) }
