@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">NicoFlow</string>
+    <string name="nav_home">首页</string>
+    <string name="nav_search">搜索</string>
+    <string name="nav_downloads">离线</string>
+    <string name="nav_library">我的</string>
+</resources>

@@ -1,0 +1,6 @@
+{
+  "name": "NicoFlow",
+  "description": "简洁无广告的ニコニコ動画客户端，支持后台播放、实时弹幕与离线下载。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
