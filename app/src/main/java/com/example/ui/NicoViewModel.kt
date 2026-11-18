@@ -554,6 +554,12 @@ class NicoViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun onWebThreadsJson(videoId: String, threadsJson: String) {
+        viewModelScope.launch {
+            repository.syncCommentsFromThreadsJson(videoId, threadsJson)
+        }
+    }
+
     fun onWebStreamResolved(videoId: String, hlsUrl: String, rawCookies: String) {
         val currentVideo = playerState.value.currentVideo ?: return
         if (currentVideo.contentId != videoId || hlsUrl.isBlank()) return

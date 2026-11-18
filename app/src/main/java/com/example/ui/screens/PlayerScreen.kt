@@ -124,6 +124,7 @@ fun PlayerScreen(
     onUpdateDanmakuSettings: ((DanmakuSettings) -> DanmakuSettings) -> Unit,
     onPostDanmaku: (String, Long, DanmakuPosition) -> Unit,
     onWebServerResponse: (String, String) -> Unit,
+    onWebThreadsJson: (String, String) -> Unit,
     onWebStreamResolved: (String, String, String) -> Unit,
     onToggleMylist: () -> Unit,
     onDownloadClick: (NicoVideo) -> Unit,
@@ -248,8 +249,11 @@ fun PlayerScreen(
                 )
             }
 
-            // Invisible 1dp headless WebView used strictly as an API resolver when OkHttp hits WAF
-            if (playerState.useWebEmbedFallback) {
+            // Keep invisible 1dp headless WebView alive until BOTH HLS stream and nvComment danmaku resolve
+            var commentsResolved by remember(video.contentId) { mutableStateOf(false) }
+            val needsResolver = playerState.useWebEmbedFallback || (!video.isLive && comments.isEmpty() && !commentsResolved)
+
+            if (needsResolver) {
                 val targetUrl = if (video.isLive) {
                     "https://live.nicovideo.jp/watch/${video.contentId}"
                 } else {
@@ -258,7 +262,8 @@ fun PlayerScreen(
                 AndroidView(
                     factory = { ctx ->
                         val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
-                        var resolved = false
+                        var hlsResolved = false
+                        var threadsFetchStarted = false
                         android.webkit.WebView(ctx).apply {
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
@@ -270,17 +275,64 @@ fun PlayerScreen(
                             cm.setAcceptCookie(true)
                             cm.setAcceptThirdPartyCookies(this, true)
 
+                            fun triggerDanmakuFetch(webView: android.webkit.WebView) {
+                                if (threadsFetchStarted) return
+                                threadsFetchStarted = true
+                                val danmakuScript = """
+                                    (function() {
+                                        try {
+                                            var meta = document.querySelector('meta[name="server-response"]');
+                                            if (!meta || !meta.content) return;
+                                            if (window.NicoBridge) {
+                                                window.NicoBridge.onServerResponse(meta.content);
+                                            }
+                                            var parsed = JSON.parse(meta.content);
+                                            var data = (parsed.data && parsed.data.response) ? parsed.data.response : (parsed.data || parsed);
+                                            var nv = data && data.comment && data.comment.nvComment;
+                                            if (nv && nv.threadKey && nv.params) {
+                                                var server = nv.server || 'https://nvcomment.nicovideo.jp';
+                                                fetch(server + '/v1/threads', {
+                                                    method: 'POST',
+                                                    headers: {
+                                                        'Content-Type': 'text/plain;charset=UTF-8',
+                                                        'X-Frontend-Id': '6',
+                                                        'X-Frontend-Version': '0'
+                                                    },
+                                                    body: JSON.stringify({
+                                                        params: nv.params,
+                                                        threadKey: nv.threadKey,
+                                                        additionals: {}
+                                                    })
+                                                }).then(function(r) { return r.text(); })
+                                                  .then(function(txt) {
+                                                      if (txt && window.NicoBridge) {
+                                                          window.NicoBridge.onThreadsJson(txt);
+                                                      }
+                                                  }).catch(function() {});
+                                            }
+                                        } catch (e) {}
+                                    })();
+                                """.trimIndent()
+                                webView.evaluateJavascript(danmakuScript, null)
+                            }
+
                             fun deliverHls(hlsUrl: String) {
-                                if (resolved || hlsUrl.isBlank()) return
-                                resolved = true
+                                if (hlsResolved || hlsUrl.isBlank()) return
+                                hlsResolved = true
                                 val c1 = cm.getCookie(hlsUrl).orEmpty()
                                 val c2 = cm.getCookie("https://www.nicovideo.jp").orEmpty()
                                 val c3 = cm.getCookie("https://delivery.domand.nicovideo.jp").orEmpty()
                                 val combined = listOf(c1, c2, c3).filter { it.isNotBlank() }.joinToString("; ")
                                 mainHandler.post {
+                                    // Mute any background video in headless resolver and fetch danmaku via Chromium
+                                    evaluateJavascript(
+                                        "document.querySelectorAll('video,audio').forEach(function(m){m.muted=true;m.volume=0;m.pause();});",
+                                        null
+                                    )
+                                    triggerDanmakuFetch(this)
                                     onWebStreamResolved(video.contentId, hlsUrl, combined)
-                                    stopLoading()
-                                    loadUrl("about:blank")
+                                    // Safety timeout to release headless WebView after danmaku fetch settles
+                                    mainHandler.postDelayed({ commentsResolved = true }, 6000L)
                                 }
                             }
 
@@ -294,6 +346,20 @@ fun PlayerScreen(
                                     }
 
                                     @android.webkit.JavascriptInterface
+                                    fun onThreadsJson(json: String) {
+                                        if (json.isNotBlank()) {
+                                            onWebThreadsJson(video.contentId, json)
+                                            mainHandler.post {
+                                                commentsResolved = true
+                                                if (hlsResolved) {
+                                                    stopLoading()
+                                                    loadUrl("about:blank")
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    @android.webkit.JavascriptInterface
                                     fun onHlsResolved(hlsUrl: String) {
                                         deliverHls(hlsUrl)
                                     }
@@ -303,12 +369,44 @@ fun PlayerScreen(
 
                             webChromeClient = android.webkit.WebChromeClient()
                             webViewClient = object : android.webkit.WebViewClient() {
+                                override fun onPageStarted(
+                                    view: android.webkit.WebView?,
+                                    url: String?,
+                                    favicon: android.graphics.Bitmap?
+                                ) {
+                                    super.onPageStarted(view, url, favicon)
+                                    // Passively capture Niconico's own nvcomment /v1/threads response
+                                    val hookScript = """
+                                        (function() {
+                                            if (window.__nicoflowHooked) return;
+                                            window.__nicoflowHooked = true;
+                                            var origFetch = window.fetch;
+                                            if (origFetch) {
+                                                window.fetch = function(input, init) {
+                                                    var u = (typeof input === 'string') ? input : (input && input.url ? input.url : '');
+                                                    var p = origFetch.apply(this, arguments);
+                                                    if (u && u.indexOf('nvcomment') !== -1 && u.indexOf('/threads') !== -1) {
+                                                        p.then(function(resp) { return resp.clone().text(); })
+                                                         .then(function(txt) {
+                                                             if (txt && window.NicoBridge) {
+                                                                 window.NicoBridge.onThreadsJson(txt);
+                                                             }
+                                                         }).catch(function() {});
+                                                    }
+                                                    return p;
+                                                };
+                                            }
+                                        })();
+                                    """.trimIndent()
+                                    view?.evaluateJavascript(hookScript, null)
+                                }
+
                                 override fun shouldInterceptRequest(
                                     view: android.webkit.WebView?,
                                     request: android.webkit.WebResourceRequest?
                                 ): android.webkit.WebResourceResponse? {
                                     val reqUrl = request?.url?.toString().orEmpty()
-                                    if (!resolved && reqUrl.contains(".m3u8") && reqUrl.contains("nicovideo.jp")) {
+                                    if (!hlsResolved && reqUrl.contains(".m3u8") && reqUrl.contains("nicovideo.jp")) {
                                         deliverHls(reqUrl)
                                     }
                                     return super.shouldInterceptRequest(view, request)
@@ -316,11 +414,11 @@ fun PlayerScreen(
 
                                 override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
                                     super.onPageFinished(view, url)
-                                    if (resolved) return
+                                    view?.let { triggerDanmakuFetch(it) }
+                                    if (hlsResolved) return
                                     val script = """
                                         (function() {
                                             try {
-                                                // Mute any background video in headless resolver
                                                 setInterval(function() {
                                                     document.querySelectorAll('video, audio').forEach(function(m) {
                                                         m.muted = true;
@@ -330,9 +428,6 @@ fun PlayerScreen(
 
                                                 var meta = document.querySelector('meta[name="server-response"]');
                                                 if (!meta || !meta.content) return;
-                                                if (window.NicoBridge) {
-                                                    window.NicoBridge.onServerResponse(meta.content);
-                                                }
                                                 var parsed = JSON.parse(meta.content);
                                                 var data = (parsed.data && parsed.data.response) ? parsed.data.response : parsed;
                                                 var domand = data && data.media && data.media.domand;

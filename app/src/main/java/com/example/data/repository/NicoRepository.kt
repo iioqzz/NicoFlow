@@ -205,6 +205,15 @@ class NicoRepository(
 
     suspend fun syncCommentsFromServerResponse(videoId: String, serverResponseJson: String) {
         val fetched = apiClient.fetchCommentsFromServerResponse(videoId, serverResponseJson)
+        saveFetchedComments(videoId, fetched)
+    }
+
+    suspend fun syncCommentsFromThreadsJson(videoId: String, threadsJson: String) {
+        val fetched = apiClient.parseNvCommentsJson(videoId, threadsJson)
+        saveFetchedComments(videoId, fetched)
+    }
+
+    private suspend fun saveFetchedComments(videoId: String, fetched: List<DanmakuComment>) {
         if (fetched.isNotEmpty()) {
             db.commentDao().clearRemoteComments(videoId)
             db.commentDao().insertAll(

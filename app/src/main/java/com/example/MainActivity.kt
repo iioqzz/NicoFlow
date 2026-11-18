@@ -123,6 +123,7 @@ fun NicoFlowRoot(viewModel: NicoViewModel = viewModel()) {
                 onUpdateDanmakuSettings = viewModel::updateDanmakuSettings,
                 onPostDanmaku = viewModel::postDanmaku,
                 onWebServerResponse = viewModel::onWebServerResponse,
+                onWebThreadsJson = viewModel::onWebThreadsJson,
                 onWebStreamResolved = viewModel::onWebStreamResolved,
                 onToggleMylist = viewModel::toggleCurrentMylist,
                 onDownloadClick = viewModel::downloadVideo,

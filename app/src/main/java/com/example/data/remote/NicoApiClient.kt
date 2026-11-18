@@ -644,41 +644,51 @@ class NicoApiClient {
                 .header("X-Frontend-Version", "0")
                 .header("Origin", "https://www.nicovideo.jp")
                 .header("Referer", "https://www.nicovideo.jp/")
-                .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
+                .post(bodyJson.toString().toRequestBody("text/plain;charset=UTF-8".toMediaType()))
                 .build()
 
             okHttpClient.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return emptyList()
-                val root = JSONObject(resp.body?.string().orEmpty())
-                val threads = root.optJSONObject("data")?.optJSONArray("threads") ?: return emptyList()
-                for (t in 0 until threads.length()) {
-                    val thread = threads.optJSONObject(t) ?: continue
-                    val comments = thread.optJSONArray("comments") ?: continue
-                    for (c in 0 until comments.length()) {
-                        val cObj = comments.optJSONObject(c) ?: continue
-                        val text = cObj.optString("body", "").trim()
-                        if (text.isBlank()) continue
-                        val id = cObj.optString("id", "${videoId}_${t}_$c")
-                        val vposMs = cObj.optLong("vposMs", 0L)
-                        val commands = cObj.optJSONArray("commands")
-                        val (colorHex, pos) = parseCommands(commands)
-                        result.add(
-                            DanmakuComment(
-                                id = id,
-                                videoId = videoId,
-                                vposMs = vposMs,
-                                text = text,
-                                colorHex = colorHex,
-                                position = pos
-                            )
-                        )
-                    }
-                }
+                return parseNvCommentsJson(videoId, resp.body?.string().orEmpty())
             }
         } catch (_: Exception) {
             // Return whatever we parsed
         }
         return result
+    }
+
+    fun parseNvCommentsJson(videoId: String, json: String): List<DanmakuComment> {
+        val result = mutableListOf<DanmakuComment>()
+        try {
+            val root = JSONObject(json)
+            val threads = root.optJSONObject("data")?.optJSONArray("threads") ?: return emptyList()
+            for (t in 0 until threads.length()) {
+                val thread = threads.optJSONObject(t) ?: continue
+                val comments = thread.optJSONArray("comments") ?: continue
+                for (c in 0 until comments.length()) {
+                    val cObj = comments.optJSONObject(c) ?: continue
+                    val text = cObj.optString("body", "").trim()
+                    if (text.isBlank()) continue
+                    val id = cObj.optString("id", "${videoId}_${t}_$c")
+                    val vposMs = cObj.optLong("vposMs", 0L)
+                    val commands = cObj.optJSONArray("commands")
+                    val (colorHex, pos) = parseCommands(commands)
+                    result.add(
+                        DanmakuComment(
+                            id = id,
+                            videoId = videoId,
+                            vposMs = vposMs,
+                            text = text,
+                            colorHex = colorHex,
+                            position = pos
+                        )
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            // Ignore malformed JSON
+        }
+        return result.sortedBy { it.vposMs }
     }
 
     private fun parseCommands(commands: JSONArray?): Pair<Long, DanmakuPosition> {
